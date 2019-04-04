@@ -3,8 +3,9 @@ import csv
 import argparse
 import chardet
 import os
-from slugify import slugify
+from functools import partial
 
+from slugify import slugify
 from signedqr import get_secret, get_signature, get_url, save_qr
 
 
@@ -15,51 +16,71 @@ def autodetect(file, maxlines=1000):
         return chardet.detect(head)['encoding']
 
 
-parser = argparse.ArgumentParser(
-    description="crea codigos qr firmados a partir de un archivo csv")
-parser.add_argument("file", help="csv file to read")
-parser.add_argument('fields', metavar='F', type=int, nargs='+',
-                    help="un numero de columna del csv que se usara en el qr")
-parser.add_argument("-d", "--delimiter",
-                    help="csv delimiter character (default is a comma)", default=',')
-parser.add_argument("-q", "--quotechar",
-                    help="quotechar (default is double quote)", default='"')
-parser.add_argument("-e", "--encoding",
-                    help="file encoding (default autodetermine)", default='auto')
-parser.add_argument("-c", "--client",
-                    help="Client code (default: proton)", default='proton')
-parser.add_argument("-s", "--subfolder",
-                    help="qr codes subfolder", default='qrcodes')
-parser.add_argument('--header', dest='hasheader', action='store_const',
-                    const=True, default=False,
-                    help='usa la primera linea como nombre de campos (default: la primer linea son datos)')
+def create_qr(line, header, args):
+    payload = dict(client=args.client)
+    for f in args.fields:
+        key = header[f] if header else f
+        payload[key] = line[f]
 
-args = parser.parse_args()
-if args.encoding == 'auto':
-    encoding = autodetect(args.file)
-else:
-    encoding = args.encoding
+    signature = get_signature(payload, get_secret())
+    payload.update(dict(s=signature))
+    url = get_url(payload)
+    save_qr(url, os.path.join(args.subfolder, line[args.fields[0]]+'.png'))
+    return url
 
-sub = args.subfolder
-if not os.path.isdir(sub):
-    os.makedirs(sub)
 
-with open(args.file, 'r', encoding=encoding) as handle:
-    csvreader = csv.reader(
-        handle, delimiter=args.delimiter, quotechar=args.quotechar)
-    header = None
-    if args.hasheader:
-        header = next(csvreader)
-        header = [slugify(f) for f in header]
+def process_lines(csvreader, header, args):
+    partial_function = partial(
+        create_qr, header=header, args=args)
+    urls = map(partial_function, csvreader)
+    for url in urls:
+        if not args.quiet:
+            print(url)
 
-    for index, line in enumerate(csvreader):
-        payload = dict(client=args.client)
-        for f in args.fields:
-            key = header[f] if header else f
-            payload[key] = line[f]
 
-        signature = get_signature(payload, get_secret())
-        payload.update(dict(s=signature))
-        url = get_url(payload)
-        print(url)
-        save_qr(url, os.path.join(sub, line[args.fields[0]]+'.png'))
+def main(process_lines):
+
+    parser = argparse.ArgumentParser(
+        description="crea codigos qr firmados a partir de un archivo csv (el secreto para firmar debe establecerce mediante la variable de ambiente PROTON_DOC_SIGNATURE)")
+    parser.add_argument("file", help="csv file to read")
+    parser.add_argument('fields', metavar='F', type=int, nargs='+',
+                        help="un numero de columna del csv que se usara en el qr")
+    parser.add_argument("-d", "--delimiter",
+                        help="csv delimiter character (default is a comma)", default=',')
+    parser.add_argument("-q", "--quotechar",
+                        help="quotechar (default is double quote)", default='"')
+    parser.add_argument("-e", "--encoding",
+                        help="file encoding (default autodetermine)", default='auto')
+    parser.add_argument("-c", "--client",
+                        help="Client code (default: proton)", default='proton')
+    parser.add_argument("-s", "--subfolder",
+                        help="qr codes subfolder (default: qrcodes)", default='qrcodes')
+    parser.add_argument('--header', dest='hasheader', action='store_const',
+                        const=True, default=False,
+                        help='usa la primera linea como nombre de campos (default: la primer linea son datos)')
+    parser.add_argument('--quiet', dest='quiet', action='store_const',
+                        const=True, default=False,
+                        help='no despliega los urls generados')
+
+    args = parser.parse_args()
+    if args.encoding == 'auto':
+        encoding = autodetect(args.file)
+    else:
+        encoding = args.encoding
+
+    sub = args.subfolder
+    if not os.path.isdir(sub):
+        os.makedirs(sub)
+
+    with open(args.file, 'r', encoding=encoding) as handle:
+        csvreader = csv.reader(
+            handle, delimiter=args.delimiter, quotechar=args.quotechar)
+        header = None
+        if args.hasheader:
+            header = [slugify(f) for f in next(csvreader)]
+
+        process_lines(csvreader, header, args)
+
+
+if __name__ == "__main__":
+    main(process_lines)
