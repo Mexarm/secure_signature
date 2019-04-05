@@ -4,6 +4,7 @@ import argparse
 import chardet
 import os
 from functools import partial
+import time
 
 from slugify import slugify
 from signedqr import get_secret, get_signature, get_url, save_qr
@@ -32,10 +33,8 @@ def create_qr(line, header, args):
 def process_lines(csvreader, header, args):
     partial_function = partial(
         create_qr, header=header, args=args)
-    urls = map(partial_function, csvreader)
-    for url in urls:
-        if not args.quiet:
-            print(url)
+    for line in csvreader:
+        yield partial_function(line)
 
 
 def main(process_lines):
@@ -78,8 +77,11 @@ def main(process_lines):
         header = None
         if args.hasheader:
             header = [slugify(f) for f in next(csvreader)]
+        urls = process_lines(csvreader, header, args)
 
-        process_lines(csvreader, header, args)
+        for url in urls:
+            if not args.quiet:
+                print(url)
 
 
 if __name__ == "__main__":
